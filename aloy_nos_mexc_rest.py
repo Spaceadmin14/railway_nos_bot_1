@@ -103,6 +103,35 @@ async def _order_watcher(mexc, symbol: str, state: Dict[str, Optional[float]]) -
             # Fetch open orders via REST API instead of WebSocket
             open_orders = await mexc.fetch_open_orders(symbol)
             
+            # STRICT VERIFICATION: Ensure only 2 orders maximum
+            our_orders = []
+            for order in open_orders:
+                if order["side"] == "buy" and order["id"] == state.get("bid_order_id"):
+                    our_orders.append(("buy", order["id"]))
+                elif order["side"] == "sell" and order["id"] == state.get("ask_order_id"):
+                    our_orders.append(("sell", order["id"]))
+            
+            # CRITICAL: If more than 2 orders found, cancel extras
+            if len(our_orders) > 2:
+                print(f"[CRITICAL] Found {len(our_orders)} orders! Cancelling extras...")
+                print(f"[CRITICAL] Our orders: {our_orders}")
+                
+                # Cancel all orders and reset state
+                for side, order_id in our_orders:
+                    try:
+                        await mexc.cancel_order(order_id, symbol)
+                        print(f"[CRITICAL] Cancelled extra {side} order: {order_id}")
+                    except Exception as e:
+                        print(f"[CRITICAL] Failed to cancel {side} order {order_id}: {e}")
+                
+                # Reset state completely
+                state["bid_order_id"] = None
+                state["ask_order_id"] = None
+                state["bid_price_live"] = None
+                state["ask_price_live"] = None
+                print("[CRITICAL] State reset - will recreate orders")
+                continue
+            
             # Update state based on open orders
             bid_found = False
             ask_found = False
@@ -123,6 +152,10 @@ async def _order_watcher(mexc, symbol: str, state: Dict[str, Optional[float]]) -
                 print(f"[INFO] Ask order {state['ask_order_id']} no longer open")
                 state["ask_order_id"] = None
                 state["ask_price_live"] = None
+                
+            # Log current order count
+            current_count = len([o for o in [state.get("bid_order_id"), state.get("ask_order_id")] if o is not None])
+            print(f"[STATUS] Current active orders: {current_count}/2")
                 
         except Exception as e:
             if shutdown_requested:
@@ -164,6 +197,24 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
             price_prec = market["precision"].get("price", 8)
             min_amount = market["limits"].get("amount", {}).get("min", 0.0) or 0.0
             tick = _tick_size(market) or 10 ** (-price_prec)
+
+            # CLEANUP: Cancel any existing orders at startup
+            print("[STARTUP] Cleaning up any existing orders...")
+            try:
+                existing_orders = await mexc.fetch_open_orders(symbol)
+                cancelled_count = 0
+                for order in existing_orders:
+                    try:
+                        await mexc.cancel_order(order["id"], symbol)
+                        print(f"[STARTUP] Cancelled existing order: {order['id']} ({order['side']})")
+                        cancelled_count += 1
+                    except Exception as e:
+                        print(f"[STARTUP] Failed to cancel order {order['id']}: {e}")
+                if cancelled_count > 0:
+                    print(f"[STARTUP] Cancelled {cancelled_count} existing orders")
+                    await asyncio.sleep(1)  # Wait for cancellations to process
+            except Exception as e:
+                print(f"[STARTUP] Error during cleanup: {e}")
 
             state: Dict[str, Optional[float]] = {
                 "bid_order_id": None,
@@ -295,7 +346,19 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
 
                         # ─────────── Bid side ───────────
                         if not updating_bid:
+                            # SAFETY CHECK: Verify we don't already have a bid order
                             if state["bid_order_id"] is None:
+                                # Double-check with exchange
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    our_bid_orders = [o for o in open_orders if o["side"] == "buy"]
+                                    if our_bid_orders:
+                                        print(f"[SAFETY] Found {len(our_bid_orders)} existing bid orders, skipping creation")
+                                        await asyncio.sleep(CHECK_INTERVAL_SEC)
+                                        continue
+                                except Exception as e:
+                                    print(f"[SAFETY] Error checking existing orders: {e}")
+                                
                                 updating_bid = True
                                 qty = _round_to(max(min_amount, ORDER_VALUE_USDT_BUY / desired_bid_price), amount_prec)
                                 print(f"[INFO] Creating bid order: {qty} @ {desired_bid_price}")
@@ -323,7 +386,19 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
 
                         # ─────────── Ask side ───────────
                         if not updating_ask:
+                            # SAFETY CHECK: Verify we don't already have an ask order
                             if state["ask_order_id"] is None:
+                                # Double-check with exchange
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    our_ask_orders = [o for o in open_orders if o["side"] == "sell"]
+                                    if our_ask_orders:
+                                        print(f"[SAFETY] Found {len(our_ask_orders)} existing ask orders, skipping creation")
+                                        await asyncio.sleep(CHECK_INTERVAL_SEC)
+                                        continue
+                                except Exception as e:
+                                    print(f"[SAFETY] Error checking existing orders: {e}")
+                                
                                 updating_ask = True
                                 qty = _round_to(max(min_amount, ORDER_VALUE_USDT_SELL / desired_ask_price), amount_prec)
                                 print(f"[INFO] Creating ask order: {qty} @ {desired_ask_price}")
