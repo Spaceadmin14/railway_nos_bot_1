@@ -1,0 +1,5 @@
+ccxt==4.4.98
+ccxtpro==1.0.1
+aiohttp==3.12.15
+uvloop==0.21.0
+python-dotenv==1.1.1
