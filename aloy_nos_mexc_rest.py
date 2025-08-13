@@ -76,7 +76,6 @@ async def _cancel_and_create(
     try:
         if old_id is not None:
             await mexc.cancel_order(old_id, symbol)
-            await asyncio.sleep(0.05)  # 50ms au lieu de 100ms
     except Exception as e:
         print(f"[WARN] Failed to cancel order {old_id}: {e}")
 
@@ -248,37 +247,78 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                         best_bid = ob["bids"][0][0]
                         best_ask = ob["asks"][0][0]
                         
-                        # Analyser les 2ème et 3ème ordres
+                        # Analyser le 2ème ordre
                         second_bid = ob["bids"][1][0] if len(ob["bids"]) > 1 else best_bid
                         second_ask = ob["asks"][1][0] if len(ob["asks"]) > 1 else best_ask
-                        third_bid = ob["bids"][2][0] if len(ob["bids"]) > 2 else second_bid
-                        third_ask = ob["asks"][2][0] if len(ob["asks"]) > 2 else second_ask
+                        
 
                         print(f"[INFO] Best bid: {best_bid}, Best ask: {best_ask}")
                         print(f"[INFO] 2nd bid: {second_bid}, 2nd ask: {second_ask}")
-                        print(f"[INFO] 3rd bid: {third_bid}, 3rd ask: {third_ask}")
 
-                        # Vérifier si nos ordres sont déjà les best bid/ask
+                        # Vérifier si nos ordres sont vraiment les best bid/ask
                         our_bid_is_best = False
                         our_ask_is_best = False
                         
-                        if state["bid_price_live"] is not None:
-                            # Si notre ordre est très proche du best bid, on est probablement le best
+                        # Vérification réelle : comparer nos ordres avec l'order book
+                        if state["bid_price_live"] is not None and state["bid_order_id"] is not None:
+                            # Notre ordre bid est-il le meilleur ?
                             if abs(state["bid_price_live"] - best_bid) <= tick:
-                                our_bid_is_best = True
-                                print(f"[STATUS] Our bid ({state['bid_price_live']}) is likely the best bid")
+                                # Vérification supplémentaire : notre ordre existe-t-il encore ?
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    our_bid_exists = any(o["id"] == state["bid_order_id"] for o in open_orders)
+                                    if our_bid_exists:
+                                        our_bid_is_best = True
+                                        print(f"[STATUS] Our bid ({state['bid_price_live']}) is the best bid")
+                                    else:
+                                        print(f"[WARN] Our bid order {state['bid_order_id']} no longer exists")
+                                        state["bid_order_id"] = None
+                                        state["bid_price_live"] = None
+                                except Exception as e:
+                                    print(f"[WARN] Error verifying bid order: {e}")
+                            else:
+                                # Notre ordre bid n'est plus le meilleur - le supprimer
+                                print(f"[CRITICAL] Our bid ({state['bid_price_live']}) is no longer the best bid ({best_bid}) - cancelling")
+                                try:
+                                    await mexc.cancel_order(state["bid_order_id"], symbol)
+                                    print(f"[CRITICAL] Cancelled outdated bid order {state['bid_order_id']}")
+                                    state["bid_order_id"] = None
+                                    state["bid_price_live"] = None
+                                except Exception as e:
+                                    print(f"[ERROR] Failed to cancel outdated bid order: {e}")
                                 
-                        if state["ask_price_live"] is not None:
-                            # Si notre ordre est très proche du best ask, on est probablement le best
+                        if state["ask_price_live"] is not None and state["ask_order_id"] is not None:
+                            # Notre ordre ask est-il le meilleur ?
                             if abs(state["ask_price_live"] - best_ask) <= tick:
-                                our_ask_is_best = True
-                                print(f"[STATUS] Our ask ({state['ask_price_live']}) is likely the best ask")
+                                # Vérification supplémentaire : notre ordre existe-t-il encore ?
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    our_ask_exists = any(o["id"] == state["ask_order_id"] for o in open_orders)
+                                    if our_ask_exists:
+                                        our_ask_is_best = True
+                                        print(f"[STATUS] Our ask ({state['ask_price_live']}) is the best ask")
+                                    else:
+                                        print(f"[WARN] Our ask order {state['ask_order_id']} no longer exists")
+                                        state["ask_order_id"] = None
+                                        state["ask_price_live"] = None
+                                except Exception as e:
+                                    print(f"[WARN] Error verifying ask order: {e}")
+                            else:
+                                # Notre ordre ask n'est plus le meilleur - le supprimer
+                                print(f"[CRITICAL] Our ask ({state['ask_price_live']}) is no longer the best ask ({best_ask}) - cancelling")
+                                try:
+                                    await mexc.cancel_order(state["ask_order_id"], symbol)
+                                    print(f"[CRITICAL] Cancelled outdated ask order {state['ask_order_id']}")
+                                    state["ask_order_id"] = None
+                                    state["ask_price_live"] = None
+                                except Exception as e:
+                                    print(f"[ERROR] Failed to cancel outdated ask order: {e}")
 
                         # Vérifier si le best bid/ask a changé significativement
                         bid_price_changed = False
                         ask_price_changed = False
                         
-                        if state["bid_price_live"] is not None:
+                        if state["bid_price_live"] is not None and state["bid_order_id"] is not None:
                             # Si le best bid a augmenté, on peut placer notre ordre plus haut
                             if best_bid > state["bid_price_live"] + tick:
                                 bid_price_changed = True
@@ -288,7 +328,7 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                 bid_price_changed = True
                                 print(f"[OPPORTUNITY] Best bid decreased from {state['bid_price_live']} to {best_bid}")
                                 
-                        if state["ask_price_live"] is not None:
+                        if state["ask_price_live"] is not None and state["ask_order_id"] is not None:
                             # Si le best ask a baissé, on peut placer notre ordre plus bas
                             if best_ask < state["ask_price_live"] - tick:
                                 ask_price_changed = True
@@ -299,13 +339,13 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                 print(f"[OPPORTUNITY] Best ask increased from {state['ask_price_live']} to {best_ask}")
 
                         # Vérifier les opportunités avec les 2ème ordres
-                        if not our_bid_is_best and state["bid_price_live"] is not None:
+                        if not our_bid_is_best and state["bid_price_live"] is not None and state["bid_order_id"] is not None:
                             # Si on peut être plus proche du 2ème bid
                             if second_bid > state["bid_price_live"] + tick:
                                 bid_price_changed = True
                                 print(f"[OPPORTUNITY] 2nd bid opportunity: {second_bid} vs our {state['bid_price_live']}")
                                 
-                        if not our_ask_is_best and state["ask_price_live"] is not None:
+                        if not our_ask_is_best and state["ask_price_live"] is not None and state["ask_order_id"] is not None:
                             # Si on peut être plus proche du 2ème ask
                             if second_ask < state["ask_price_live"] - tick:
                                 ask_price_changed = True
@@ -370,19 +410,36 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                     state["bid_price_live"] = new_price
                                     print(f"[INFO] Bid order created: {new_id}")
                                 updating_bid = False
-                            elif state["bid_price_live"] is not None and (abs(state["bid_price_live"] - desired_bid_price) >= tick or bid_price_changed):
-                                updating_bid = True
-                                qty = _round_to(max(min_amount, ORDER_VALUE_USDT_BUY / desired_bid_price), amount_prec)
-                                reason = "price change" if bid_price_changed else "spread adjustment"
-                                print(f"[INFO] Updating bid order ({reason}): {qty} @ {desired_bid_price}")
-                                new_id, new_price = await _cancel_and_create(
-                                    mexc, symbol, "buy", state["bid_order_id"], qty, desired_bid_price
-                                )
-                                if new_id:
-                                    state["bid_order_id"] = new_id
-                                    state["bid_price_live"] = new_price
-                                    print(f"[INFO] Bid order updated: {new_id}")
-                                updating_bid = False
+                            elif state["bid_price_live"] is not None and state["bid_order_id"] is not None:
+                                # CRITICAL FIX: Verify the bid order still exists before updating
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    bid_order_exists = any(o["id"] == state["bid_order_id"] for o in open_orders)
+                                    
+                                    if not bid_order_exists:
+                                        print(f"[FIX] Bid order {state['bid_order_id']} no longer exists, clearing state")
+                                        state["bid_order_id"] = None
+                                        state["bid_price_live"] = None
+                                        continue
+                                        
+                                except Exception as e:
+                                    print(f"[WARN] Error verifying bid order existence: {e}")
+                                    # Continue with update attempt if verification fails
+                                
+                                # Only update if order exists and price needs adjustment
+                                if (abs(state["bid_price_live"] - desired_bid_price) >= tick or bid_price_changed):
+                                    updating_bid = True
+                                    qty = _round_to(max(min_amount, ORDER_VALUE_USDT_BUY / desired_bid_price), amount_prec)
+                                    reason = "price change" if bid_price_changed else "spread adjustment"
+                                    print(f"[INFO] Updating bid order ({reason}): {qty} @ {desired_bid_price}")
+                                    new_id, new_price = await _cancel_and_create(
+                                        mexc, symbol, "buy", state["bid_order_id"], qty, desired_bid_price
+                                    )
+                                    if new_id:
+                                        state["bid_order_id"] = new_id
+                                        state["bid_price_live"] = new_price
+                                        print(f"[INFO] Bid order updated: {new_id}")
+                                    updating_bid = False
 
                         # ─────────── Ask side ───────────
                         if not updating_ask:
@@ -410,19 +467,36 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                     state["ask_price_live"] = new_price
                                     print(f"[INFO] Ask order created: {new_id}")
                                 updating_ask = False
-                            elif state["ask_price_live"] is not None and (abs(state["ask_price_live"] - desired_ask_price) >= tick or ask_price_changed):
-                                updating_ask = True
-                                qty = _round_to(max(min_amount, ORDER_VALUE_USDT_SELL / desired_ask_price), amount_prec)
-                                reason = "price change" if ask_price_changed else "spread adjustment"
-                                print(f"[INFO] Updating ask order ({reason}): {qty} @ {desired_ask_price}")
-                                new_id, new_price = await _cancel_and_create(
-                                    mexc, symbol, "sell", state["ask_order_id"], qty, desired_ask_price
-                                )
-                                if new_id:
-                                    state["ask_order_id"] = new_id
-                                    state["ask_price_live"] = new_price
-                                    print(f"[INFO] Ask order updated: {new_id}")
-                                updating_ask = False
+                            elif state["ask_price_live"] is not None and state["ask_order_id"] is not None:
+                                # CRITICAL FIX: Verify the ask order still exists before updating
+                                try:
+                                    open_orders = await mexc.fetch_open_orders(symbol)
+                                    ask_order_exists = any(o["id"] == state["ask_order_id"] for o in open_orders)
+                                    
+                                    if not ask_order_exists:
+                                        print(f"[FIX] Ask order {state['ask_order_id']} no longer exists, clearing state")
+                                        state["ask_order_id"] = None
+                                        state["ask_price_live"] = None
+                                        continue
+                                        
+                                except Exception as e:
+                                    print(f"[WARN] Error verifying ask order existence: {e}")
+                                    # Continue with update attempt if verification fails
+                                
+                                # Only update if order exists and price needs adjustment
+                                if (abs(state["ask_price_live"] - desired_ask_price) >= tick or ask_price_changed):
+                                    updating_ask = True
+                                    qty = _round_to(max(min_amount, ORDER_VALUE_USDT_SELL / desired_ask_price), amount_prec)
+                                    reason = "price change" if ask_price_changed else "spread adjustment"
+                                    print(f"[INFO] Updating ask order ({reason}): {qty} @ {desired_ask_price}")
+                                    new_id, new_price = await _cancel_and_create(
+                                        mexc, symbol, "sell", state["ask_order_id"], qty, desired_ask_price
+                                    )
+                                    if new_id:
+                                        state["ask_order_id"] = new_id
+                                        state["ask_price_live"] = new_price
+                                        print(f"[INFO] Ask order updated: {new_id}")
+                                    updating_ask = False
                                 
                     except Exception as e:
                         if shutdown_requested:
