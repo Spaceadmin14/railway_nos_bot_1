@@ -26,7 +26,7 @@ except Exception:
 SYMBOL = os.getenv("MEXC_SYMBOL", "NOS/USDT")
 
 SPREAD_THRESHOLD_PCT = float(os.getenv("SPREAD_THRESHOLD_PCT", "1")) / 100  # 1%
-CHECK_INTERVAL_SEC = 0.5  # 0.5 seconde entre les vérifications (plus rapide)
+CHECK_INTERVAL_SEC = 0.1  # 0.1 seconde entre les vérifications (ultra rapide)
 ORDER_VALUE_USDT_BUY = float(os.getenv("ORDER_VALUE_USDT_BUY", "1.50"))  # buy side order USDT value
 ORDER_VALUE_USDT_SELL = float(os.getenv("ORDER_VALUE_USDT_SELL", "1.50"))  # sell side order USDT value
 
@@ -76,6 +76,7 @@ async def _cancel_and_create(
     try:
         if old_id is not None:
             await mexc.cancel_order(old_id, symbol)
+            # No delay needed - immediate creation
     except Exception as e:
         print(f"[WARN] Failed to cancel order {old_id}: {e}")
 
@@ -110,7 +111,7 @@ async def _cancel_all_orders(mexc, symbol: str) -> None:
         
         if cancelled_count > 0:
             print(f"[CRITICAL] Cancelled {cancelled_count} orders total")
-            await asyncio.sleep(0.2)  # Wait for cancellations to process
+            await asyncio.sleep(0.05)  # Wait for cancellations to process (faster)
         else:
             print(f"[INFO] No orders found to cancel on {symbol}")
             
@@ -181,7 +182,7 @@ async def _order_watcher(mexc, symbol: str, state: Dict[str, Optional[float]]) -
             print(f"[WARN] Order watcher error: {e}")
             await asyncio.sleep(2)
         else:
-            await asyncio.sleep(2)  # Check every 2 seconds
+            await asyncio.sleep(0.5)  # Check every 0.5 seconds (faster)
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
@@ -202,8 +203,8 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                 "secret": API_SECRET,
                 "enableRateLimit": True,
                 "options": {"defaultType": "spot"},
-                "timeout": 10000,  # 10 secondes au lieu de 30
-                "rateLimit": 100,   # 100ms au lieu de 1000ms
+                "timeout": 5000,  # 5 secondes (plus rapide)
+                "rateLimit": 50,   # 50ms (plus rapide)
             })
 
             await mexc.load_markets()
@@ -230,7 +231,7 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                         print(f"[STARTUP] Failed to cancel order {order['id']}: {e}")
                 if cancelled_count > 0:
                     print(f"[STARTUP] Cancelled {cancelled_count} existing orders")
-                    await asyncio.sleep(1)  # Wait for cancellations to process
+                    await asyncio.sleep(0.2)  # Wait for cancellations to process (faster)
             except Exception as e:
                 print(f"[STARTUP] Error during cleanup: {e}")
 
@@ -420,7 +421,7 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                                 print(f"[CRITICAL] Cancelled orphaned bid order: {order['id']}")
                                             except Exception as e:
                                                 print(f"[ERROR] Failed to cancel orphaned bid order {order['id']}: {e}")
-                                        await asyncio.sleep(0.1)  # Wait for cancellations to process
+                                        await asyncio.sleep(0.02)  # Wait for cancellations to process (ultra fast)
                                         continue
                                 except Exception as e:
                                     print(f"[SAFETY] Error checking existing orders: {e}")
@@ -484,7 +485,7 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                                 print(f"[CRITICAL] Cancelled orphaned ask order: {order['id']}")
                                             except Exception as e:
                                                 print(f"[ERROR] Failed to cancel orphaned ask order {order['id']}: {e}")
-                                        await asyncio.sleep(0.1)  # Wait for cancellations to process
+                                        await asyncio.sleep(0.02)  # Wait for cancellations to process (ultra fast)
                                         continue
                                 except Exception as e:
                                     print(f"[SAFETY] Error checking existing orders: {e}")
@@ -535,8 +536,8 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                         if shutdown_requested:
                             break
                         print(f"[ERROR] Book loop error: {e}")
-                        print("[INFO] Waiting 5 seconds before retrying...")
-                        await asyncio.sleep(5)
+                        print("[INFO] Waiting 1 second before retrying...")
+                        await asyncio.sleep(1)
                     
                     await asyncio.sleep(CHECK_INTERVAL_SEC)
 
@@ -582,8 +583,8 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
             if shutdown_requested:
                 break
             print(f"[ERROR] Main loop error: {e}")
-            print("[INFO] Restarting bot in 10 seconds...")
-            await asyncio.sleep(10)
+            print("[INFO] Restarting bot in 3 seconds...")
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
     # Register signal handlers
