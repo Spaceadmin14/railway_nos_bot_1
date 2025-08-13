@@ -281,15 +281,15 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                         
                         # Vérification réelle : comparer nos ordres avec l'order book
                         if state["bid_price_live"] is not None and state["bid_order_id"] is not None:
-                            # Notre ordre bid est-il le meilleur ?
-                            if abs(state["bid_price_live"] - best_bid) <= tick:
+                            # Notre ordre bid est-il le meilleur ? Vérification stricte
+                            if state["bid_price_live"] == best_bid:  # Exactement égal au best bid
                                 # Vérification supplémentaire : notre ordre existe-t-il encore ?
                                 try:
                                     open_orders = await mexc.fetch_open_orders(symbol)
                                     our_bid_exists = any(o["id"] == state["bid_order_id"] for o in open_orders)
                                     if our_bid_exists:
                                         our_bid_is_best = True
-                                        print(f"[STATUS] Our bid ({state['bid_price_live']}) is the best bid")
+                                        print(f"[STATUS] Our bid ({state['bid_price_live']}) is the best bid ({best_bid})")
                                     else:
                                         print(f"[WARN] Our bid order {state['bid_order_id']} no longer exists")
                                         state["bid_order_id"] = None
@@ -308,15 +308,15 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                     print(f"[ERROR] Failed to cancel outdated bid order: {e}")
                                 
                         if state["ask_price_live"] is not None and state["ask_order_id"] is not None:
-                            # Notre ordre ask est-il le meilleur ?
-                            if abs(state["ask_price_live"] - best_ask) <= tick:
+                            # Notre ordre ask est-il le meilleur ? Vérification stricte
+                            if state["ask_price_live"] == best_ask:  # Exactement égal au best ask
                                 # Vérification supplémentaire : notre ordre existe-t-il encore ?
                                 try:
                                     open_orders = await mexc.fetch_open_orders(symbol)
                                     our_ask_exists = any(o["id"] == state["ask_order_id"] for o in open_orders)
                                     if our_ask_exists:
                                         our_ask_is_best = True
-                                        print(f"[STATUS] Our ask ({state['ask_price_live']}) is the best ask")
+                                        print(f"[STATUS] Our ask ({state['ask_price_live']}) is the best ask ({best_ask})")
                                     else:
                                         print(f"[WARN] Our ask order {state['ask_order_id']} no longer exists")
                                         state["ask_order_id"] = None
