@@ -93,6 +93,30 @@ async def _cancel_and_create(
         print(f"[ERROR] Failed to place {side} order: {e}")
         return None, None
 
+async def _cancel_all_orders(mexc, symbol: str) -> None:
+    """Cancel ALL orders on the symbol to reset state completely."""
+    try:
+        print(f"[CRITICAL] Cancelling ALL orders on {symbol} to reset state")
+        open_orders = await mexc.fetch_open_orders(symbol)
+        cancelled_count = 0
+        
+        for order in open_orders:
+            try:
+                await mexc.cancel_order(order["id"], symbol)
+                print(f"[CRITICAL] Cancelled order: {order['id']} ({order['side']})")
+                cancelled_count += 1
+            except Exception as e:
+                print(f"[ERROR] Failed to cancel order {order['id']}: {e}")
+        
+        if cancelled_count > 0:
+            print(f"[CRITICAL] Cancelled {cancelled_count} orders total")
+            await asyncio.sleep(0.2)  # Wait for cancellations to process
+        else:
+            print(f"[INFO] No orders found to cancel on {symbol}")
+            
+    except Exception as e:
+        print(f"[ERROR] Error in _cancel_all_orders: {e}")
+
 async def _order_watcher(mexc, symbol: str, state: Dict[str, Optional[float]]) -> None:
     """Keeps *state* up-to-date with order status using REST API."""
     global shutdown_requested
@@ -112,16 +136,11 @@ async def _order_watcher(mexc, symbol: str, state: Dict[str, Optional[float]]) -
             
             # CRITICAL: If more than 2 orders found, cancel extras
             if len(our_orders) > 2:
-                print(f"[CRITICAL] Found {len(our_orders)} orders! Cancelling extras...")
+                print(f"[CRITICAL] Found {len(our_orders)} orders! Cancelling ALL orders to reset...")
                 print(f"[CRITICAL] Our orders: {our_orders}")
                 
-                # Cancel all orders and reset state
-                for side, order_id in our_orders:
-                    try:
-                        await mexc.cancel_order(order_id, symbol)
-                        print(f"[CRITICAL] Cancelled extra {side} order: {order_id}")
-                    except Exception as e:
-                        print(f"[CRITICAL] Failed to cancel {side} order {order_id}: {e}")
+                # Cancel ALL orders and reset state completely
+                await _cancel_all_orders(mexc, symbol)
                 
                 # Reset state completely
                 state["bid_order_id"] = None
@@ -393,8 +412,15 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                     open_orders = await mexc.fetch_open_orders(symbol)
                                     our_bid_orders = [o for o in open_orders if o["side"] == "buy"]
                                     if our_bid_orders:
-                                        print(f"[SAFETY] Found {len(our_bid_orders)} existing bid orders, skipping creation")
-                                        await asyncio.sleep(CHECK_INTERVAL_SEC)
+                                        print(f"[CRITICAL] Found {len(our_bid_orders)} orphaned bid orders, cancelling all and resetting")
+                                        # Cancel ALL bid orders to reset state
+                                        for order in our_bid_orders:
+                                            try:
+                                                await mexc.cancel_order(order["id"], symbol)
+                                                print(f"[CRITICAL] Cancelled orphaned bid order: {order['id']}")
+                                            except Exception as e:
+                                                print(f"[ERROR] Failed to cancel orphaned bid order {order['id']}: {e}")
+                                        await asyncio.sleep(0.1)  # Wait for cancellations to process
                                         continue
                                 except Exception as e:
                                     print(f"[SAFETY] Error checking existing orders: {e}")
@@ -450,8 +476,15 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                     open_orders = await mexc.fetch_open_orders(symbol)
                                     our_ask_orders = [o for o in open_orders if o["side"] == "sell"]
                                     if our_ask_orders:
-                                        print(f"[SAFETY] Found {len(our_ask_orders)} existing ask orders, skipping creation")
-                                        await asyncio.sleep(CHECK_INTERVAL_SEC)
+                                        print(f"[CRITICAL] Found {len(our_ask_orders)} orphaned ask orders, cancelling all and resetting")
+                                        # Cancel ALL ask orders to reset state
+                                        for order in our_ask_orders:
+                                            try:
+                                                await mexc.cancel_order(order["id"], symbol)
+                                                print(f"[CRITICAL] Cancelled orphaned ask order: {order['id']}")
+                                            except Exception as e:
+                                                print(f"[ERROR] Failed to cancel orphaned ask order {order['id']}: {e}")
+                                        await asyncio.sleep(0.1)  # Wait for cancellations to process
                                         continue
                                 except Exception as e:
                                     print(f"[SAFETY] Error checking existing orders: {e}")
