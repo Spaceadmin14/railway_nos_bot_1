@@ -351,6 +351,15 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                 ask_price_changed = True
                                 print(f"[OPPORTUNITY] 2nd ask opportunity: {second_ask} vs our {state['ask_price_live']}")
 
+                        # DEBUG: Log des variables pour comprendre le problème ask
+                        print(f"[DEBUG] ask_price_changed: {ask_price_changed}")
+                        print(f"[DEBUG] state['ask_price_live']: {state['ask_price_live']}")
+                        print(f"[DEBUG] desired_ask_price: {desired_ask_price}")
+                        if state["ask_price_live"] is not None:
+                            price_diff = abs(state["ask_price_live"] - desired_ask_price)
+                            print(f"[DEBUG] ask price difference: {price_diff}, tick: {tick}")
+                            print(f"[DEBUG] should_update_ask: {price_diff >= tick}")
+
                         # Calculer les prix désirés - logique simplifiée
                         # Toujours se positionner le plus proche possible du marché
                         desired_bid_price = _round_to(best_bid + tick, price_prec)
@@ -497,6 +506,11 @@ async def tighten_spread_rest(symbol: str = SYMBOL) -> None:
                                         state["ask_price_live"] = new_price
                                         print(f"[INFO] Ask order updated: {new_id}")
                                     updating_ask = False
+                                else:
+                                    print(f"[DEBUG] Ask order NOT updated - conditions not met:")
+                                    print(f"[DEBUG]   price_diff >= tick: {abs(state['ask_price_live'] - desired_ask_price) >= tick}")
+                                    print(f"[DEBUG]   ask_price_changed: {ask_price_changed}")
+                                    print(f"[DEBUG]   updating_ask: {updating_ask}")
                                 
                     except Exception as e:
                         if shutdown_requested:
